@@ -1,4 +1,5 @@
 #!/bin/bash
+
 ##### CONSTANTS #####
 COLOR_RED=$(tput setaf 1)
 COLOR_GREEN=$(tput setaf 2)
@@ -12,7 +13,7 @@ MSG_TYPE_OK="OK"
 
 #### FUNCTIONS ####
 function test_connection() {
-	local output=$(echo -n $(sqlplus -S "$ORACLE_USER/$ORACLE_PASSWORD@(DESCRIPTION = (ADDRESS_LIST = (ADDRESS = (PROTOCOL = TCP) (HOST = $ORACLE_HOST)(PORT = $ORACLE_PORT))) (CONNECT_DATA = (SID = $ORACLE_SID)))" <<EOF
+	local output=$(echo -n $(sqlplus -S "$DB_USER/$DB_PASSWORD@(DESCRIPTION = (ADDRESS_LIST = (ADDRESS = (PROTOCOL = TCP) (HOST = $DB_HOST)(PORT = $DB_PORT))) (CONNECT_DATA = (SID = $DB_DATABASE)))" <<EOF
 SET HEAD OFF
 SELECT 1 FROM DUAL;
 exit;
@@ -54,7 +55,7 @@ function print_results() {
 		*) exit ;;
 	esac
 
-	printf "[ %s%-5s%s ] %s\n" "${color}" "$msg_type" "${COLOR_DEFAULT}" "$msg" 
+	printf "[ %s%-5s%s ] %s%*s\n" "${color}" "$msg_type" "${COLOR_DEFAULT}" "$msg" $((COLS - ${#color} - ${#msg_type} - ${#COLOR_DEFAULT} - ${#msg}))
 	if [ -n "$details" ]; then
 		printf '%s\n' " \`--> $details"
 	fi
@@ -87,7 +88,7 @@ function print_progress() {
 }
 
 
-function exec_sql() {
+function exec_oracle_sql() {
 	local sql_file=$1
 	local sql_file_log=$DIR_SCRIPTS/$(basename $sql_file .sql).log
 
@@ -97,17 +98,17 @@ set serveroutput on
 spool $sql_file_log
 @$sql_file
 exit;
-" | sqlplus -S "$ORACLE_USER/$ORACLE_PASSWORD@(DESCRIPTION = (ADDRESS_LIST = (ADDRESS = (PROTOCOL = TCP) (HOST = $ORACLE_HOST)(PORT = $ORACLE_PORT))) (CONNECT_DATA = (SID = $ORACLE_SID)))" > /dev/null 2>&1 &
+" | sqlplus -S "$DB_USER/$DB_PASSWORD@(DESCRIPTION = (ADDRESS_LIST = (ADDRESS = (PROTOCOL = TCP) (HOST = $DB_HOST)(PORT = $DB_PORT))) (CONNECT_DATA = (SID = $DB_DATABASE)))" > /dev/null 2>&1 &
 	local pid=$!
 	local msg="Executing sql file: $sql_file"
 	print_progress "$pid" "$msg"
 
-	local msg="Sql file executed: "$(basename $sql_file)
+	local msg="Sql file executed: $sql_file"
 	local errors=$(grep -i -e "^ERRO" -e "^SP2-" -e "^ORA-" -e "^PLS-" $sql_file_log 2>/dev/null |wc -l)
 	if [ $errors -gt 0 ]; then
 		local result=0
-		local detalhe="Check the log file for errors ${COLOR_YELLOW}$sql_file_log${COLOR_DEFAULT}"
-		print_results "ERROR" "$msg" "$detalhe"
+		local detail="Check the log file for errors ${COLOR_YELLOW}$sql_file_log${COLOR_DEFAULT}"
+		print_results "ERROR" "$msg" "$detail"
 	else
 		local result=1
 		print_results "OK" "$msg"
@@ -127,7 +128,7 @@ function exec_sql_files() {
 	# apply all sql scripts in directory
 	for sql_file in `ls $DIR_SCRIPTS/*.sql`
 	do
-		exec_sql "$sql_file"
+		exec_oracle_sql "$sql_file"
 		result=$?
 
 		if [ $result -eq 0 ]; then
@@ -142,11 +143,12 @@ function exec_sql_files() {
 
 
 ##### START #####
-unset ORACLE_HOST
-unset ORACLE_PORT
-unset ORACLE_SID
-unset ORACLE_USER
-unset ORACLE_PASSWORD
+# clean variables, to avoid conflicts inside this script
+unset DB_HOST
+unset DB_PORT
+unset DB_DATABASE
+unset DB_USER
+unset DB_PASSWORD
 
 unset DIR_SCRIPTS
 unset DIR_LOGS
@@ -156,23 +158,24 @@ function usage() {
 	echo "Usage: $0 OPTIONS <scripts dir>"
 	echo ""
 	echo "OPTIONS:"
-	echo "  -h = Oracle host/IP                 Ex.: 10.20.40.5 or localhost"
-	echo "  -P = Oracle port (defaut = 1521)    Ex.: 1521 or 1530"
-	echo "  -d = Oracle database (ORACLE_SID)   Ex.: XE"
-	echo "  -u = Oracle user"
-	echo "  -p = Oracle password"
+	echo "  -h = Database host/IP                 Ex.: 10.20.40.5 or localhost"
+	echo "  -P = Database port (defaut = 1521)    Ex.: 1521 or 1530"
+	echo "  -d = Database database                Ex.: XE"
+	echo "  -u = Database user"
+	echo "  -p = Database password"
 	exit 0
 }
 
 
+#### MAIN ####
 while getopts :h:P::d:u:p: optname
 do
 	case "$optname" in
-		"h") ORACLE_HOST=$OPTARG ;;
-		"P") ORACLE_PORT=$OPTARG ;;
-		"d") ORACLE_SID=$OPTARG ;;
-		"u") ORACLE_USER=$OPTARG ;;
-		"p") ORACLE_PASSWORD=$OPTARG ;;
+		"h") DB_HOST=$OPTARG ;;
+		"P") DB_PORT=$OPTARG ;;
+		"d") DB_DATABASE=$OPTARG ;;
+		"u") DB_USER=$OPTARG ;;
+		"p") DB_PASSWORD=$OPTARG ;;
 		\?) 
 			echo "Invalid option: $OPTARG"
 			echo ""
@@ -190,24 +193,15 @@ shift $((OPTIND-1))
 
 DIR_SCRIPTS=$1
 
-if [ -z "$ORACLE_PORT" ]; then
-	ORACLE_PORT=1521
+if [ -z "$DB_PORT" ]; then
+	DB_PORT=1521
 fi
 
-
-# echo "ORACLE_HOST = $ORACLE_HOST"
-# echo "ORACLE_PORT = $ORACLE_PORT"
-# echo "ORACLE_SID = $ORACLE_SID"
-# echo "ORACLE_USER = $ORACLE_USER"
-# echo "ORACLE_PASSWORD = $ORACLE_PASSWORD"
-# echo "DIR_SCRIPTS = $DIR_SCRIPTS"
-
-
-if [ -z "$ORACLE_HOST" ] || \
-	[ -z "$ORACLE_PORT" ] || \
-	[ -z "$ORACLE_SID" ] || \
-	[ -z "$ORACLE_USER" ] || \
-	[ -z "$ORACLE_PASSWORD" ] || \
+if [ -z "$DB_HOST" ] || \
+	[ -z "$DB_PORT" ] || \
+	[ -z "$DB_DATABASE" ] || \
+	[ -z "$DB_USER" ] || \
+	[ -z "$DB_PASSWORD" ] || \
 	[ -z "$DIR_SCRIPTS" ]; then
 	usage
 fi
@@ -215,6 +209,15 @@ fi
 exec_sql_files
 
 
+# echo "DB_HOST = $DB_HOST"
+# echo "DB_PORT = $DB_PORT"
+# echo "DB_DATABASE = $DB_DATABASE"
+# echo "DB_USER = $DB_USER"
+# echo "DB_PASSWORD = $DB_PASSWORD"
+# echo "DIR_SCRIPTS = $DIR_SCRIPTS"
+
+
+# clean variables used inside this script
 unset DIR_SCRIPTS
 unset DIR_LOGS
 
@@ -227,8 +230,8 @@ unset COLOR_YELLOW
 unset COLOR_DEFAULT
 unset COLS
 
-unset ORACLE_HOST
-unset ORACLE_PORT
-unset ORACLE_SID
-unset ORACLE_USER
-unset ORACLE_PASSWORD
+unset DB_HOST
+unset DB_PORT
+unset DB_DATABASE
+unset DB_USER
+unset DB_PASSWORD
