@@ -80,6 +80,24 @@ function print_progress() {
 }
 
 
+function check_client() {
+	case "$DB_TYPE" in 
+		"$DB_TYPE_ORACLE") local client="sqlplus2" ;;
+		"$DB_TYPE_MYSQL") local client="mysql" ;;
+		"$DB_TYPE_POSTGRESQL") local client="psql" ;;
+	esac
+
+	local output=$(command -v $client)
+	if [ -z "$output" ]; then
+		print_message "$MSG_TYPE_ERROR" "$client is required to run scripts against the $DB_TYPE database"
+		print_message "$MSG_TYPE_ERROR" "Check if $client is in your \$PATH or even installed"
+		output=0
+	fi
+
+	return $output
+}
+
+
 function test_connection() {
 	case "$DB_TYPE" in 
 		"$DB_TYPE_ORACLE") 
@@ -99,8 +117,8 @@ EOF
 	esac
 
 	if [ "$output" != "1" ]; then
-		print_message "ERROR" "It was not possible connect to Oracle!"
-		print_message "ERROR" "$output"
+		print_message "$MSG_TYPE_ERROR" "It was not possible connect to database!"
+		print_message "$MSG_TYPE_ERROR" "$output"
 		output=0
 	fi
 
@@ -157,7 +175,7 @@ exit;
 	else
 		rm $sql_log 2>/dev/null
 		local result=1
-		print_results "OK" "$msg"
+		print_results "$MSG_TYPE_OK" "$msg"
 	fi
 
 	return $result
@@ -165,6 +183,12 @@ exit;
 
 
 function exec_sql_files() {
+	check_client
+	local result=$?
+	if [ $result -eq 0 ]; then
+		exit 1
+	fi
+
 	test_connection
 	local result=$?
 	if [ $result -eq 0 ]; then
@@ -225,18 +249,18 @@ Examples:
 
     Oracle:
 
-    $(basename $0) -h oracle://localhost/XE -u test_user -p t3stP4ss0rd
-    $(basename $0) -h oracle://localhost:1521/XE -u test_user -p t3stP4ss0rd
+    $(basename $0) -h oracle://localhost/XE -u test_user -p t3stP4ss0rd scripts/oracle
+    $(basename $0) -h oracle://localhost:1521/XE -u test_user -p t3stP4ss0rd scripts/oracle
 
     MySQL:
 
-    $(basename $0) -h mysql://10.20.40.5/testdb -u test_user -p t3stP4ss0rd
-    $(basename $0) -h mysql://10.20.40.5:3306/testdb -u test_user -p t3stP4ss0rd
+    $(basename $0) -h mysql://10.20.40.5/testdb -u test_user -p t3stP4ss0rd scripts/mysql
+    $(basename $0) -h mysql://10.20.40.5:3306/testdb -u test_user -p t3stP4ss0rd scripts/mysql
     
     PostgreSQL:
 
-    $(basename $0) -h postgresql//localhost/testdb -u test_user -p t3stP4ss0rd
-    $(basename $0) -h postgresql//localhost:5432/testdb -u test_user -p t3stP4ss0rd
+    $(basename $0) -h postgresql//localhost/testdb -u test_user -p t3stP4ss0rd scripts/postgresql
+    $(basename $0) -h postgresql//localhost:5432/testdb -u test_user -p t3stP4ss0rd scripts/postgresql
 "
     exit 0
 }
@@ -284,14 +308,14 @@ fi
 DIR_LOGS=logs/$DB_TYPE/$DB_HOST/$DB_DATABASE/$DB_USER
 mkdir -p $DIR_LOGS
 
-printf "%-12s = %s\n" "DB_TYPE" "$DB_TYPE"
-printf "%-12s = %s\n" "DB_HOST" "$DB_HOST"
-printf "%-12s = %s\n" "DB_PORT" "$DB_PORT"
-printf "%-12s = %s\n" "DB_DATABASE" "$DB_DATABASE"
-printf "%-12s = %s\n" "DB_USER" "$DB_USER"
-printf "%-12s = %s\n" "DB_PASSWORD" "$DB_PASSWORD"
-printf "%-12s = %s\n" "DIR_LOGS" "$DIR_LOGS"
-printf "%-12s = %s\n" "DIR_SCRIPTS" "$DIR_SCRIPTS"
+# printf "%-12s = %s\n" "DB_TYPE" "$DB_TYPE"
+# printf "%-12s = %s\n" "DB_HOST" "$DB_HOST"
+# printf "%-12s = %s\n" "DB_PORT" "$DB_PORT"
+# printf "%-12s = %s\n" "DB_DATABASE" "$DB_DATABASE"
+# printf "%-12s = %s\n" "DB_USER" "$DB_USER"
+# printf "%-12s = %s\n" "DB_PASSWORD" "$DB_PASSWORD"
+# printf "%-12s = %s\n" "DIR_LOGS" "$DIR_LOGS"
+# printf "%-12s = %s\n" "DIR_SCRIPTS" "$DIR_SCRIPTS"
 
 
 if [ -z "$DB_TYPE" ] || \
@@ -305,7 +329,6 @@ if [ -z "$DB_TYPE" ] || \
 fi
 
 exec_sql_files
-
 
 
 # clean variables used inside this script
