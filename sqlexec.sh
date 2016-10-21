@@ -10,26 +10,18 @@ COLS=$(tput cols)
 MSG_TYPE_ERROR="ERROR"
 MSG_TYPE_OK="OK"
 
+URI_REGEX="(oracle|mysql|postgresql)://([a-zA-Z0-9_.]+):?([0-9]+)?/([a-zA-Z0-9_]+)"
+
+DB_TYPE_ORACLE="oracle"
+DB_TYPE_MYSQL="mysql"
+DB_TYPE_POSTGRESQL="postgresql"
+
+DEFAULT_PORT_ORACLE=1521
+DEFAULT_PORT_MYSQL=3306
+DEFAULT_PORT_POSTGRESQL=5432
+
 
 #### FUNCTIONS ####
-function test_connection() {
-	local output=$(echo -n $(sqlplus -S "$DB_USER/$DB_PASSWORD@(DESCRIPTION = (ADDRESS_LIST = (ADDRESS = (PROTOCOL = TCP) (HOST = $DB_HOST)(PORT = $DB_PORT))) (CONNECT_DATA = (SID = $DB_DATABASE)))" <<EOF
-SET HEAD OFF
-SELECT 1 FROM DUAL;
-exit;
-EOF
-))
-
-	if [ "$output" != "1" ]; then
-		print_message "ERROR" "It was not possible connect to Oracle!"
-		print_message "ERROR" "$output"
-		output=0
-	fi
-
-	return $output
-}
-
-
 function print_message() {
 	local msg_type=$1
 	local msg=$2
@@ -88,28 +80,82 @@ function print_progress() {
 }
 
 
-function exec_oracle_sql() {
-	local sql_file=$1
-	local sql_file_log=$DIR_SCRIPTS/$(basename $sql_file .sql).log
+function test_connection() {
+	case "$DB_TYPE" in 
+		"$DB_TYPE_ORACLE") 
+			local output=$(echo -n $(sqlplus -S "$DB_USER/$DB_PASSWORD@(DESCRIPTION = (ADDRESS_LIST = (ADDRESS = (PROTOCOL = TCP) (HOST = $DB_HOST)(PORT = $DB_PORT))) (CONNECT_DATA = (SID = $DB_DATABASE)))" <<EOF
+SET HEAD OFF
+SELECT 1 FROM DUAL;
+exit;
+EOF
+))
+			;;
+		"$DB_TYPE_MYSQL") 
+			local output=$(echo -n $(mysql --silent --skip-column-names --host=$DB_HOST --database=$DB_DATABASE --port=$DB_PORT --user=$DB_USER --password=$DB_PASSWORD --execute="SELECT 1"))
+			;;
+		"$DB_TYPE_POSTGRESQL") 
+			local output=$(echo -n $(psql --quiet --tuples-only --host=$DB_HOST --dbname=$DB_DATABASE --port=$DB_PORT --user=$DB_USER --command="SELECT 1"))
+			;;
+	esac
 
-	echo "
+	if [ "$output" != "1" ]; then
+		print_message "ERROR" "It was not possible connect to Oracle!"
+		print_message "ERROR" "$output"
+		output=0
+	fi
+
+	return $output
+}
+
+
+function exec_sql() {
+	local sql_file=$1
+	local sql_log=$2
+
+	case "$DB_TYPE" in 
+		"$DB_TYPE_ORACLE") 
+			echo "
 set echo on
 set serveroutput on
-spool $sql_file_log
+spool $sql_log
 @$sql_file
 exit;
 " | sqlplus -S "$DB_USER/$DB_PASSWORD@(DESCRIPTION = (ADDRESS_LIST = (ADDRESS = (PROTOCOL = TCP) (HOST = $DB_HOST)(PORT = $DB_PORT))) (CONNECT_DATA = (SID = $DB_DATABASE)))" > /dev/null 2>&1 &
-	local pid=$!
+			local pid=$!
+			;;
+		"$DB_TYPE_MYSQL") 
+			mysql --silent --line-numbers --host=$DB_HOST --database=$DB_DATABASE --port=$DB_PORT --user=$DB_USER --password=$DB_PASSWORD < $sql_file >/dev/null 2>$sql_log &
+			local pid=$!
+			;;
+		"$DB_TYPE_POSTGRESQL") 
+			psql --quiet --host=$DB_HOST --dbname=$DB_DATABASE --port=$DB_PORT --user=$DB_USER --file=$sql_file --output=/dev/null 2>$sql_log &
+			local pid=$!
+			;;
+	esac
+
 	local msg="Executing sql file: $sql_file"
 	print_progress "$pid" "$msg"
 
 	local msg="Sql file executed: $sql_file"
-	local errors=$(grep -i -e "^ERRO" -e "^SP2-" -e "^ORA-" -e "^PLS-" $sql_file_log 2>/dev/null |wc -l)
+	
+	case "$DB_TYPE" in 
+		"$DB_TYPE_ORACLE") 
+			local errors=$(grep -i -e "^ERRO" -e "^SP2-" -e "^ORA-" -e "^PLS-" $sql_log 2>/dev/null | wc -l)
+			;;
+		"$DB_TYPE_MYSQL") 
+			local errors=$(wc -l < $sql_log)
+			;;
+		"$DB_TYPE_POSTGRESQL") 
+			local errors=$(wc -l < $sql_log)
+			;;
+	esac
+
 	if [ $errors -gt 0 ]; then
 		local result=0
-		local detail="Check the log file for errors ${COLOR_YELLOW}$sql_file_log${COLOR_DEFAULT}"
+		local detail="Check the log file for errors ${COLOR_YELLOW}$sql_log${COLOR_DEFAULT}"
 		print_results "ERROR" "$msg" "$detail"
 	else
+		rm $sql_log 2>/dev/null
 		local result=1
 		print_results "OK" "$msg"
 	fi
@@ -126,13 +172,15 @@ function exec_sql_files() {
 	fi
 
 	# apply all sql scripts in directory
-	for sql_file in `ls $DIR_SCRIPTS/*.sql`
+	for sql_file in $(ls $DIR_SCRIPTS/*.sql)
 	do
-		exec_oracle_sql "$sql_file"
-		result=$?
+		sql_file=$(dirname $sql_file)/$(basename $sql_file)
+		local sql_log=$DIR_LOGS/$(echo $sql_file | sed 's:/:__:g').log
 
+		exec_sql "$sql_file" "$sql_log"
+		local result=$?
 		if [ $result -eq 0 ]; then
-			read -p "Errors have occurred. Continue (y|n)? " proceed
+			read -p "Errors have occurred. Continue (y|N)? " proceed
 			if [[ "$proceed" != "y" ]] && [[ "$proceed" != "Y"  ]]; then
 				echo "Please check the errors before run it again. Aborting..."
 				exit 1
@@ -144,6 +192,7 @@ function exec_sql_files() {
 
 ##### START #####
 # clean variables, to avoid conflicts inside this script
+unset DB_TYPE
 unset DB_HOST
 unset DB_PORT
 unset DB_DATABASE
@@ -154,67 +203,109 @@ unset DIR_SCRIPTS
 unset DIR_LOGS
 
 
-function usage() {
-	echo "Usage: $0 OPTIONS <scripts dir>"
-	echo ""
-	echo "OPTIONS:"
-	echo "  -h = Database host/IP                 Ex.: 10.20.40.5 or localhost"
-	echo "  -P = Database port (defaut = 1521)    Ex.: 1521 or 1530"
-	echo "  -d = Database database                Ex.: XE"
-	echo "  -u = Database user"
-	echo "  -p = Database password"
-	exit 0
+function print_usage() {
+    echo "Usage: $(basename $0) OPTIONS <scripts dir>
+
+    Executes the .sql files in <scripts dir> on database
+    
+OPTIONS:
+
+    -h <database host>  in format <type>://<ip|hostname>[:<port>]/<dbname>
+                        type:   oracle or mysql or postgresql
+                        port:   optional. default values:
+                                1521 for Oracle
+                                3306 for MySQL
+                                5432 for PostgreSQL
+                        dbname: database name for MySQL or PostgreSQL
+                                SID for Oracle
+    -u <user>
+    -p <password>
+    
+Examples:
+
+    Oracle:
+
+    $(basename $0) -h oracle://localhost/XE -u test_user -p t3stP4ss0rd
+    $(basename $0) -h oracle://localhost:1521/XE -u test_user -p t3stP4ss0rd
+
+    MySQL:
+
+    $(basename $0) -h mysql://10.20.40.5/testdb -u test_user -p t3stP4ss0rd
+    $(basename $0) -h mysql://10.20.40.5:3306/testdb -u test_user -p t3stP4ss0rd
+    
+    PostgreSQL:
+
+    $(basename $0) -h postgresql//localhost/testdb -u test_user -p t3stP4ss0rd
+    $(basename $0) -h postgresql//localhost:5432/testdb -u test_user -p t3stP4ss0rd
+"
+    exit 0
 }
 
 
 #### MAIN ####
-while getopts :h:P::d:u:p: optname
+while getopts :h:u:p: optname
 do
 	case "$optname" in
-		"h") DB_HOST=$OPTARG ;;
-		"P") DB_PORT=$OPTARG ;;
-		"d") DB_DATABASE=$OPTARG ;;
+		"h") DB_URI=$OPTARG ;;
 		"u") DB_USER=$OPTARG ;;
 		"p") DB_PASSWORD=$OPTARG ;;
 		\?) 
 			echo "Invalid option: $OPTARG"
 			echo ""
-			usage
+			print_usage
 			;;
 		:)
 			echo "Invalid option: $OPTARG requires an argument"
 			echo ""
-			usage
+			print_usage
 			;;
-		*) usage ;;
+		*) print_usage ;;
 	esac
 done
 shift $((OPTIND-1))
 
 DIR_SCRIPTS=$1
 
-if [ -z "$DB_PORT" ]; then
-	DB_PORT=1521
+if [[ $DB_URI =~ $URI_REGEX ]]; then
+	DB_TYPE=${BASH_REMATCH[1]}
+	DB_HOST=${BASH_REMATCH[2]}
+	DB_PORT=${BASH_REMATCH[3]}
+	DB_DATABASE=${BASH_REMATCH[4]}
+
+	if [ -z "$DB_PORT" ]; then
+		case "$DB_TYPE" in 
+			"$DB_TYPE_ORACLE") DB_PORT=$DEFAULT_PORT_ORACLE ;;
+			"$DB_TYPE_MYSQL") DB_PORT=$DEFAULT_PORT_MYSQL ;;
+			"$DB_TYPE_POSTGRESQL") DB_PORT=$DEFAULT_PORT_POSTGRESQL ;;
+		esac
+	fi
 fi
 
-if [ -z "$DB_HOST" ] || \
+DIR_LOGS=logs/$DB_TYPE/$DB_HOST/$DB_DATABASE/$DB_USER
+mkdir -p $DIR_LOGS
+
+printf "%-12s = %s\n" "DB_TYPE" "$DB_TYPE"
+printf "%-12s = %s\n" "DB_HOST" "$DB_HOST"
+printf "%-12s = %s\n" "DB_PORT" "$DB_PORT"
+printf "%-12s = %s\n" "DB_DATABASE" "$DB_DATABASE"
+printf "%-12s = %s\n" "DB_USER" "$DB_USER"
+printf "%-12s = %s\n" "DB_PASSWORD" "$DB_PASSWORD"
+printf "%-12s = %s\n" "DIR_LOGS" "$DIR_LOGS"
+printf "%-12s = %s\n" "DIR_SCRIPTS" "$DIR_SCRIPTS"
+
+
+if [ -z "$DB_TYPE" ] || \
+	[ -z "$DB_HOST" ] || \
 	[ -z "$DB_PORT" ] || \
 	[ -z "$DB_DATABASE" ] || \
 	[ -z "$DB_USER" ] || \
 	[ -z "$DB_PASSWORD" ] || \
 	[ -z "$DIR_SCRIPTS" ]; then
-	usage
+	print_usage
 fi
 
 exec_sql_files
 
-
-# echo "DB_HOST = $DB_HOST"
-# echo "DB_PORT = $DB_PORT"
-# echo "DB_DATABASE = $DB_DATABASE"
-# echo "DB_USER = $DB_USER"
-# echo "DB_PASSWORD = $DB_PASSWORD"
-# echo "DIR_SCRIPTS = $DIR_SCRIPTS"
 
 
 # clean variables used inside this script
@@ -230,6 +321,7 @@ unset COLOR_YELLOW
 unset COLOR_DEFAULT
 unset COLS
 
+unset DB_TYPE
 unset DB_HOST
 unset DB_PORT
 unset DB_DATABASE
