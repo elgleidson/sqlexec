@@ -82,7 +82,7 @@ function print_progress() {
 
 function check_client() {
 	case "$DB_TYPE" in 
-		"$DB_TYPE_ORACLE") local client="sqlplus2" ;;
+		"$DB_TYPE_ORACLE") local client="sqlplus" ;;
 		"$DB_TYPE_MYSQL") local client="mysql" ;;
 		"$DB_TYPE_POSTGRESQL") local client="psql" ;;
 	esac
