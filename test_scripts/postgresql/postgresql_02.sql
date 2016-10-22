@@ -1,0 +1,1 @@
+SELECT PG_SLEEP(2);

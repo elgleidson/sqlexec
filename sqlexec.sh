@@ -92,6 +92,8 @@ function check_client() {
 		print_message "$MSG_TYPE_ERROR" "$client is required to run scripts against the $DB_TYPE database"
 		print_message "$MSG_TYPE_ERROR" "Check if $client is in your \$PATH or even installed"
 		output=0
+	else
+		output=1
 	fi
 
 	return $output

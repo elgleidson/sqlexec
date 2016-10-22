@@ -1,0 +1,3 @@
+SELECT PG_SLEEP(2);
+
+RAISE EXECPTION 'teste';
